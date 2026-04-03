@@ -1,0 +1,52 @@
+Campo,Tipo,Descrição
+veiculo_id,FK,Chave estrangeira para a tabela de veículos.
+cliente_id,FK,Chave estrangeira para a tabela de usuários/clientes.
+data_inicio,DateTime,Início do uso.
+data_fim,DateTime,Previsão de entrega.
+valor_total,Decimal,Calculado pelo sistema no momento da reserva.
+status,Enum,"Pendente, Ativa, Concluída, Cancelada."
+// Exemplo de lógica implementada em src/services/ReservaService.js
+async function criarReserva(veiculo, cliente, dataIni, dataFim) {
+    // 1. Validação de Status
+    if (veiculo.status !== "Disponível") {
+        throw new Error("Veículo já está em uso ou em manutenção.");
+    }
+    
+    // 2. Validação de Data
+    const hoje = new Date();
+    if (new Date(dataIni) < hoje) {
+        throw new Error("A data de início não pode ser no passado.");
+    }
+    
+    // 3. Cálculo do Valor Total
+    const diffTempo = Math.abs(new Date(dataFim) - new Date(dataIni));
+    const dias = Math.ceil(diffTempo / (1000 * 60 * 60 * 24)); 
+    const valorEstimado = dias * veiculo.valorDiaria;
+    
+    // 4. Persistência (Exemplo usando Sequelize/Mongoose)
+    const reserva = await Reserva.create({
+        veiculo_id: veiculo.id,
+        cliente_id: cliente.id,
+        data_inicio: dataIni,
+        data_fim: dataFim,
+        valor_total: valorEstimado,
+        status: 'Pendente'
+    });
+
+    return reserva;
+}
+/
+├── src/
+│   ├── models/           # Definição das tabelas (Veiculo, Cliente, Reserva)
+│   │   ├── Veiculo.js
+│   │   ├── Cliente.js
+│   │   └── Reserva.js
+│   ├── services/         # ONDE FICA A REGRA DE NEGÓCIO (Obrigatório em SI)
+│   │   └── ReservaService.js
+│   ├── controllers/      # Gerenciamento das requisições HTTP
+│   │   └── ReservaController.js
+│   ├── routes/           # Definição dos endpoints da API
+│   │   └── index.js
+│   └── app.js            # Inicialização do servidor Express
+├── package.json          # Dependências do Node.js
+└── sistema.md            # Documentação que você solicitou acima
