@@ -1,22 +1,52 @@
-Campo,Tipo,Descrição
-veiculo_id,FK,Chave estrangeira para a tabela de veículos.
-cliente_id,FK,Chave estrangeira para a tabela de usuários/clientes.
-data_inicio,DateTime,Início do uso.
-data_fim,DateTime,Previsão de entrega.
-valor_total,Decimal,Calculado pelo sistema no momento da reserva.
-status,Enum,"Pendente, Ativa, Concluída, Cancelada."# Exemplo de validação da regra de negócio
-def criar_reserva(veiculo, cliente, data_ini, data_fim):
-    if veiculo.status != "Disponível":
-        return "Erro: Veículo já está em uso ou em manutenção."
-    
-    if data_ini < hoje:
-        return "Erro: A data de início não pode ser no passado."
-    
-    # Cálculo da regra de negócio
-    dias = (data_fim - data_ini).days
-    valor_estimado = dias * veiculo.valor_diaria
-    
-    # Salvar no banco (Branch: Código Inicial)
-    reserva = Reserva.save(veiculo, cliente, data_ini, data_fim, valor_estimado)
-    return reserva
+const { Reserva, Veiculo } = require('../models');
+const { Op } = require('sequelize');
+
+class ReservaService {
+    async criarReserva(veiculoId, clienteId, dataIni, dataFim) {
+        // 1. Verificação de existência e status do veículo
+        const veiculo = await Veiculo.findByPk(veiculoId);
+        if (!veiculo || veiculo.status !== 'Disponível') {
+            throw new Error("Veículo indisponível ou não encontrado.");
+        }
+
+        // 2. Validação de Regra de Negócio: Anti-Overbooking
+        // Verifica se já existe reserva ativa para este veículo no período selecionado
+        const conflito = await Reserva.findOne({
+            where: {
+                veiculo_id: veiculoId,
+                status: { [Op.ne]: 'Cancelada' },
+                [Op.or]: [
+                    { data_inicio: { [Op.between]: [dataIni, dataFim] } },
+                    { data_fim: { [Op.between]: [dataIni, dataFim] } }
+                ]
+            }
+        });
+
+        if (conflito) {
+            throw new Error("Este veículo já possui uma reserva para o período selecionado.");
+        }
+
+        // 3. Cálculo de Valor (Lógica de Negócio)
+        const dias = Math.ceil(Math.abs(new Date(dataFim) - new Date(dataIni)) / (1000 * 60 * 60 * 24));
+        const valorTotal = dias * veiculo.valorDiaria;
+
+        // 4. Persistência ACID
+        return await Reserva.create({
+            veiculo_id: veiculoId,
+            cliente_id: clienteId,
+            data_inicio: dataIni,
+            data_fims: dataFim,
+            valor_total: valorTotal,
+            status: 'Pendente'
+        });
+    }
+}
+
+module.exports = new ReservaService();
+
+Funcionalidade,Papel da Implementação,Tecnologia Chave
+Login,Autenticação JWT com criptografia bcrypt,Node.js + JWT
+Gestão de Reservas,Lógica de não-sobreposição (Anti-overbooking),PostgreSQL (Queries de data)
+Vistoria Digital,Upload de fotos e checklist de avarias,AWS S3 + React
+Cálculo de Tarifas,Processamento automático de valores,Node.js (Regras de Negócio)
     
