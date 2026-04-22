@@ -1,52 +1,166 @@
-Campo,Tipo,Descrição
-veiculo_id,FK,Chave estrangeira para a tabela de veículos.
-cliente_id,FK,Chave estrangeira para a tabela de usuários/clientes.
-data_inicio,DateTime,Início do uso.
-data_fim,DateTime,Previsão de entrega.
-valor_total,Decimal,Calculado pelo sistema no momento da reserva.
-status,Enum,"Pendente, Ativa, Concluída, Cancelada."
-// Exemplo de lógica implementada em src/services/ReservaService.js
-async function criarReserva(veiculo, cliente, dataIni, dataFim) {
-    // 1. Validação de Status
-    if (veiculo.status !== "Disponível") {
-        throw new Error("Veículo já está em uso ou em manutenção.");
+const { Sequelize } = require('sequelize');
+require('dotenv').config();
+
+const sequelize = new Sequelize(process.env.DB_URL, {
+  dialect: 'postgres',
+  logging: false,
+  define: {
+    timestamps: true,
+    underscored: true // Transforma camelCase em snake_case no banco
+  }
+});
+
+module.exports = sequelize;
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
+
+const Veiculo = sequelize.define('Veiculo', {
+  modelo: {
+    type: DataTypes.STRING,
+    allowNull: false
+  },
+  status: {
+    type: DataTypes.STRING,
+    defaultValue: 'Disponível' // Disponível, Manutenção, Alugado
+  },
+  valorDiaria: {
+    type: DataTypes.FLOAT,
+    allowNull: false,
+    field: 'valor_diaria'
+  }
+});
+
+module.exports = Veiculo;
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
+
+const Reserva = sequelize.define('Reserva', {
+  veiculoId: {
+    type: DataTypes.INTEGER,
+    field: 'veiculo_id'
+  },
+  clienteId: {
+    type: DataTypes.INTEGER,
+    field: 'cliente_id'
+  },
+  dataInicio: {
+    type: DataTypes.DATEONLY,
+    field: 'data_inicio'
+  },
+  dataFim: {
+    type: DataTypes.DATEONLY,
+    field: 'data_fim'
+  },
+  valorTotal: {
+    type: DataTypes.FLOAT,
+    field: 'valor_total'
+  },
+  status: {
+    type: DataTypes.STRING,
+    defaultValue: 'Pendente'
+  }
+});
+
+module.exports = Reserva;
+const Veiculo = require('../models/Veiculo');
+const Reserva = require('../models/Reserva');
+const { Op } = require('sequelize');
+
+class ReservaService {
+  async criarReserva(veiculoId, clienteId, dataIni, dataFim) {
+    // 1. Validar se o veículo existe e está apto
+    const veiculo = await Veiculo.findByPk(veiculoId);
+    if (!veiculo || veiculo.status !== 'Disponível') {
+      throw new Error("Veículo não encontrado ou indisponível para novos aluguéis.");
     }
-    
-    // 2. Validação de Data
-    const hoje = new Date();
-    if (new Date(dataIni) < hoje) {
-        throw new Error("A data de início não pode ser no passado.");
-    }
-    
-    // 3. Cálculo do Valor Total
-    const diffTempo = Math.abs(new Date(dataFim) - new Date(dataIni));
-    const dias = Math.ceil(diffTempo / (1000 * 60 * 60 * 24)); 
-    const valorEstimado = dias * veiculo.valorDiaria;
-    
-    // 4. Persistência (Exemplo usando Sequelize/Mongoose)
-    const reserva = await Reserva.create({
-        veiculo_id: veiculo.id,
-        cliente_id: cliente.id,
-        data_inicio: dataIni,
-        data_fim: dataFim,
-        valor_total: valorEstimado,
-        status: 'Pendente'
+
+    // 2. Lógica de Overbooking (Verifica se as datas se sobrepõem)
+    const conflito = await Reserva.findOne({
+      where: {
+        veiculoId: veiculoId,
+        status: { [Op.ne]: 'Cancelada' },
+        [Op.or]: [
+          { dataInicio: { [Op.between]: [dataIni, dataFim] } },
+          { dataFim: { [Op.between]: [dataIni, dataFim] } },
+          {
+            [Op.and]: [
+              { dataInicio: { [Op.lte]: dataIni } },
+              { dataFim: { [Op.gte]: dataFim } }
+            ]
+          }
+        ]
+      }
     });
 
-    return reserva;
+    if (conflito) {
+      throw new Error("O veículo já possui uma reserva ativa para o período selecionado.");
+    }
+
+    // 3. Cálculo financeiro
+    const d1 = new Date(dataIni);
+    const d2 = new Date(dataFim);
+    const diffTempo = Math.abs(d2 - d1);
+    const totalDias = Math.ceil(diffTempo / (1000 * 60 * 60 * 24)) || 1;
+    const valorCalculado = totalDias * veiculo.valorDiaria;
+
+    // 4. Salvar no banco
+    return await Reserva.create({
+      veiculoId,
+      clienteId,
+      dataInicio: dataIni,
+      dataFim: dataFim,
+      valorTotal: valorCalculado,
+      status: 'Confirmada'
+    });
+  }
 }
-/
-├── src/
-│   ├── models/           # Definição das tabelas (Veiculo, Cliente, Reserva)
-│   │   ├── Veiculo.js
-│   │   ├── Cliente.js
-│   │   └── Reserva.js
-│   ├── services/         # ONDE FICA A REGRA DE NEGÓCIO (Obrigatório em SI)
-│   │   └── ReservaService.js
-│   ├── controllers/      # Gerenciamento das requisições HTTP
-│   │   └── ReservaController.js
-│   ├── routes/           # Definição dos endpoints da API
-│   │   └── index.js
-│   └── app.js            # Inicialização do servidor Express
-├── package.json          # Dependências do Node.js
-└── sistema.md            # Documentação que você solicitou acima
+
+module.exports = new ReservaService();
+const ReservaService = require('../services/ReservaService');
+
+class ReservaController {
+  async store(req, res) {
+    try {
+      const { veiculoId, clienteId, dataIni, dataFim } = req.body;
+      const reserva = await ReservaService.criarReserva(veiculoId, clienteId, dataIni, dataFim);
+      return res.status(201).json(reserva);
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
+  }
+}
+
+module.exports = new ReservaController();
+const express = require('express');
+const router = express.Router();
+const ReservaController = require('../controllers/ReservaController');
+
+router.post('/', (req, res) => ReservaController.store(req, res));
+
+module.exports = router;
+const express = require('express');
+const sequelize = require('./config/database');
+const reservaRoutes = require('./routes/reservaRoutes');
+
+const app = express();
+app.use(express.json());
+
+// Registro de Rotas
+app.use('/api/reservas', reservaRoutes);
+
+const PORT = process.env.PORT || 3000;
+
+// Sincroniza o banco e sobe o servidor
+sequelize.sync().then(() => {
+  console.log('Conexão com Postgres estabelecida com sucesso.');
+  app.listen(PORT, () => {
+    console.log(Servidor rodando na porta ${PORT});
+  });
+}).catch(err => {
+  console.error('Falha ao iniciar o sistema:', err);
+});
+
+
+
+
+
